@@ -1,9 +1,3 @@
-/**
- * clickup-farol.js — v2
- * Match por similaridade de texto (Jaccard) para casar tasks do ClickUp
- * com os elementos do HTML mesmo quando os textos diferem levemente.
- */
-
 (function () {
   'use strict';
 
@@ -17,18 +11,21 @@
   }
 
   function similaridade(a, b) {
-    const wa = new Set(norm(a).split(' ').filter(w => w.length > 3));
-    const wb = new Set(norm(b).split(' ').filter(w => w.length > 3));
-    if (wa.size === 0 || wb.size === 0) return 0;
-    const intersecao = [...wa].filter(w => wb.has(w)).length;
-    const uniao = new Set([...wa, ...wb]).size;
-    return intersecao / uniao;
+    var wa = norm(a).split(' ').filter(function(w) { return w.length > 3; });
+    var wb = norm(b).split(' ').filter(function(w) { return w.length > 3; });
+    var setA = {}, setB = {};
+    wa.forEach(function(w) { setA[w] = true; });
+    wb.forEach(function(w) { setB[w] = true; });
+    if (wa.length === 0 || wb.length === 0) return 0;
+    var inter = wa.filter(function(w) { return setB[w]; }).length;
+    var uniao = Object.keys(Object.assign({}, setA, setB)).length;
+    return inter / uniao;
   }
 
   function melhorMatch(textoHTML, tasks, threshold) {
-    threshold = threshold || 0.35;
-    let melhor = null;
-    let melhorScore = 0;
+    threshold = threshold || 0.3;
+    var melhor = null;
+    var melhorScore = 0;
     for (var i = 0; i < tasks.length; i++) {
       var score = similaridade(textoHTML, tasks[i].nome);
       if (score > melhorScore) {
@@ -47,12 +44,9 @@
     if (!dot) { dot = document.createElement('span'); dot.className = 'dot'; }
     el.textContent = '';
     el.appendChild(dot);
-    el.appendChild(document.createTextNode(statusLabel || capitalize(status)));
+    var label = statusLabel || (status.charAt(0).toUpperCase() + status.slice(1));
+    el.appendChild(document.createTextNode(label));
     return true;
-  }
-
-  function capitalize(s) {
-    return s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
   }
 
   function exibirBadge(msg, cor) {
@@ -61,7 +55,10 @@
     b.innerHTML = '<span style="width:8px;height:8px;border-radius:50%;background:#10B981;flex-shrink:0"></span>' + msg;
     document.body.appendChild(b);
     requestAnimationFrame(function() { b.style.opacity = '1'; b.style.transform = 'translateY(0)'; });
-    setTimeout(function() { b.style.opacity = '0'; b.style.transform = 'translateY(8px)'; setTimeout(function() { b.remove(); }, 400); }, 8000);
+    setTimeout(function() {
+      b.style.opacity = '0'; b.style.transform = 'translateY(8px)';
+      setTimeout(function() { b.remove(); }, 400);
+    }, 8000);
   }
 
   function carregarFarois() {
@@ -74,8 +71,11 @@
         if (data.error) throw new Error(data.error);
 
         var tasks = Object.values(data.tasks || {});
-        var objetivos = tasks.filter(function(t) { return t.tipo === 'Objetivo'; });
-        var resultados = tasks.filter(function(t) { return t.tipo === 'Resultado-chave'; });
+
+        // Objetivos = sem parentId, Resultados = com parentId
+        var objetivos = tasks.filter(function(t) { return !t.parentId; });
+        var resultados = tasks.filter(function(t) { return !!t.parentId; });
+
         var atualizados = 0;
 
         document.querySelectorAll('.objetivo-bloco').forEach(function(bloco) {
@@ -83,7 +83,7 @@
           if (!objTextEl) return;
 
           var match = melhorMatch(objTextEl.textContent, objetivos);
-          if (match) {
+          if (match && match.status !== 'cinza') {
             var farolEl = bloco.querySelector('.farol-obj .farol');
             if (aplicarFarol(farolEl, match.status, match.statusLabel)) atualizados++;
           }
@@ -92,7 +92,7 @@
             var rTextoEl = rEl.querySelector('.resultado-texto');
             if (!rTextoEl) return;
             var rMatch = melhorMatch(rTextoEl.textContent, resultados);
-            if (rMatch) {
+            if (rMatch && rMatch.status !== 'cinza') {
               var farolEl = rEl.querySelector('.farol');
               if (aplicarFarol(farolEl, rMatch.status, rMatch.statusLabel)) atualizados++;
             }
@@ -104,20 +104,18 @@
           hour: '2-digit', minute: '2-digit'
         });
         exibirBadge('Farois atualizados via ClickUp · ' + dataFmt + ' · ' + atualizados + ' itens');
-        console.log('[Lekto OKR] ' + atualizados + ' farois atualizados.');
+        console.log('[Lekto OKR] ' + atualizados + ' farois atualizados. Objetivos: ' + objetivos.length + ', Resultados: ' + resultados.length);
       })
       .catch(function(err) {
         console.warn('[Lekto OKR] Erro:', err.message);
-        exibirBadge('Farol indisponivel: ' + err.message, '#7F1D1D');
       });
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', function() { setTimeout(carregarFarois, 1000); });
+    document.addEventListener('DOMContentLoaded', function() { setTimeout(carregarFarois, 2500); });
   } else {
     setTimeout(carregarFarois, 2500);
   }
 
   setInterval(carregarFarois, 15 * 60 * 1000);
-
 })();
