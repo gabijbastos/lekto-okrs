@@ -1,220 +1,123 @@
 /**
- * clickup-farol.js
- * Busca os farois atualizados do /api/okrs e aplica no HTML
- * renderizado pelo planejamento estratégico.
- *
- * Como funciona:
- * 1. Faz GET /api/okrs
- * 2. Para cada objetivo/resultado encontrado pelo nome (match exato ou parcial)
- *    atualiza a classe .farol correspondente no DOM
- * 3. Exibe a data/hora da última atualização
+ * clickup-farol.js — v2
+ * Match por similaridade de texto (Jaccard) para casar tasks do ClickUp
+ * com os elementos do HTML mesmo quando os textos diferem levemente.
  */
 
 (function () {
   'use strict';
 
-  // Aguarda o HTML estar renderizado antes de iniciar
-  function iniciarIntegracao() {
-    carregarFarois();
-  }
-
-  // Normaliza string para comparação tolerante
-  function normalizar(str) {
+  function norm(str) {
     return (str || '')
       .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9\s]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
   }
 
-  // Aplica classe farol num elemento
-  function aplicarFarol(el, status, label) {
-    if (!el) return;
-    // Remove classes anteriores
+  function similaridade(a, b) {
+    const wa = new Set(norm(a).split(' ').filter(w => w.length > 3));
+    const wb = new Set(norm(b).split(' ').filter(w => w.length > 3));
+    if (wa.size === 0 || wb.size === 0) return 0;
+    const intersecao = [...wa].filter(w => wb.has(w)).length;
+    const uniao = new Set([...wa, ...wb]).size;
+    return intersecao / uniao;
+  }
+
+  function melhorMatch(textoHTML, tasks, threshold) {
+    threshold = threshold || 0.35;
+    let melhor = null;
+    let melhorScore = 0;
+    for (var i = 0; i < tasks.length; i++) {
+      var score = similaridade(textoHTML, tasks[i].nome);
+      if (score > melhorScore) {
+        melhorScore = score;
+        melhor = tasks[i];
+      }
+    }
+    return melhorScore >= threshold ? melhor : null;
+  }
+
+  function aplicarFarol(el, status, statusLabel) {
+    if (!el) return false;
     el.classList.remove('verde', 'amarelo', 'vermelho', 'cinza', 'concluido');
     el.classList.add(status);
-
-    // Atualiza o texto do label dentro do .farol
-    const dot = el.querySelector('.dot');
+    var dot = el.querySelector('.dot');
+    if (!dot) { dot = document.createElement('span'); dot.className = 'dot'; }
     el.textContent = '';
-    if (dot) {
-      el.appendChild(dot);
-    } else {
-      const novoDot = document.createElement('span');
-      novoDot.className = 'dot';
-      el.appendChild(novoDot);
-    }
-    el.appendChild(document.createTextNode(label || capitalize(status)));
+    el.appendChild(dot);
+    el.appendChild(document.createTextNode(statusLabel || capitalize(status)));
+    return true;
   }
 
-  function capitalize(str) {
-    if (!str) return '';
-    return str.charAt(0).toUpperCase() + str.slice(1);
+  function capitalize(s) {
+    return s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
   }
 
-  // Encontra elemento .farol-obj dentro de um bloco de objetivo pelo texto
-  function encontrarFarolObjetivo(textoObjetivo) {
-    const blocos = document.querySelectorAll('.objetivo-bloco');
-    for (const bloco of blocos) {
-      const objText = bloco.querySelector('.obj-text');
-      if (!objText) continue;
-      if (normalizar(objText.textContent).includes(normalizar(textoObjetivo).slice(0, 40))) {
-        return bloco.querySelector('.farol-obj .farol');
-      }
-    }
-    return null;
+  function exibirBadge(msg, cor) {
+    var b = document.createElement('div');
+    b.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:9999;background:' + (cor || '#1F2937') + ';color:#E5E7EB;font-family:Mulish,system-ui,sans-serif;font-size:12px;font-weight:600;padding:8px 16px;border-radius:999px;display:flex;align-items:center;gap:8px;box-shadow:0 4px 16px rgba(0,0,0,0.25);opacity:0;transform:translateY(8px);transition:all 0.4s ease;';
+    b.innerHTML = '<span style="width:8px;height:8px;border-radius:50%;background:#10B981;flex-shrink:0"></span>' + msg;
+    document.body.appendChild(b);
+    requestAnimationFrame(function() { b.style.opacity = '1'; b.style.transform = 'translateY(0)'; });
+    setTimeout(function() { b.style.opacity = '0'; b.style.transform = 'translateY(8px)'; setTimeout(function() { b.remove(); }, 400); }, 8000);
   }
 
-  // Encontra elementos .farol dentro dos resultados pelo texto
-  function encontrarFarolResultado(textoResultado) {
-    const resultados = document.querySelectorAll('.resultado');
-    for (const r of resultados) {
-      const txt = r.querySelector('.resultado-texto');
-      if (!txt) continue;
-      if (normalizar(txt.textContent).includes(normalizar(textoResultado).slice(0, 40))) {
-        return r.querySelector('.farol');
-      }
-    }
-    return null;
-  }
+  function carregarFarois() {
+    fetch('/api/okrs')
+      .then(function(res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      })
+      .then(function(data) {
+        if (data.error) throw new Error(data.error);
 
-  // Exibe badge de status da integração no topo da página
-  function exibirBadgeStatus(atualizadoEm, totalAtualizacoes) {
-    const existente = document.getElementById('clickup-badge');
-    if (existente) existente.remove();
+        var tasks = Object.values(data.tasks || {});
+        var objetivos = tasks.filter(function(t) { return t.tipo === 'Objetivo'; });
+        var resultados = tasks.filter(function(t) { return t.tipo === 'Resultado-chave'; });
+        var atualizados = 0;
 
-    const badge = document.createElement('div');
-    badge.id = 'clickup-badge';
+        document.querySelectorAll('.objetivo-bloco').forEach(function(bloco) {
+          var objTextEl = bloco.querySelector('.obj-text');
+          if (!objTextEl) return;
 
-    const data = new Date(atualizadoEm);
-    const dataFormatada = data.toLocaleString('pt-BR', {
-      day: '2-digit', month: '2-digit', year: 'numeric',
-      hour: '2-digit', minute: '2-digit'
-    });
-
-    badge.innerHTML = `
-      <span class="badge-dot"></span>
-      <span>Farois atualizados via ClickUp · ${dataFormatada} · ${totalAtualizacoes} atualizações</span>
-    `;
-
-    badge.style.cssText = `
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      z-index: 999;
-      background: #1F2937;
-      color: #E5E7EB;
-      font-family: 'Mulish', system-ui, sans-serif;
-      font-size: 12px;
-      font-weight: 600;
-      padding: 8px 16px;
-      border-radius: 999px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.25);
-      letter-spacing: 0.01em;
-      opacity: 0;
-      transform: translateY(8px);
-      transition: all 0.4s ease;
-    `;
-
-    const dot = badge.querySelector('.badge-dot');
-    dot.style.cssText = `
-      width: 8px; height: 8px; border-radius: 50%;
-      background: #10B981; flex-shrink: 0;
-      box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.3);
-    `;
-
-    document.body.appendChild(badge);
-
-    // Anima entrada
-    requestAnimationFrame(() => {
-      badge.style.opacity = '1';
-      badge.style.transform = 'translateY(0)';
-    });
-
-    // Remove após 8 segundos
-    setTimeout(() => {
-      badge.style.opacity = '0';
-      badge.style.transform = 'translateY(8px)';
-      setTimeout(() => badge.remove(), 400);
-    }, 8000);
-  }
-
-  // Exibe badge de erro
-  function exibirBadgeErro(msg) {
-    const badge = document.createElement('div');
-    badge.style.cssText = `
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      z-index: 999;
-      background: #7F1D1D;
-      color: #FCA5A5;
-      font-family: 'Mulish', system-ui, sans-serif;
-      font-size: 12px;
-      font-weight: 600;
-      padding: 8px 16px;
-      border-radius: 999px;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.25);
-    `;
-    badge.textContent = `⚠ Farol ClickUp indisponível: ${msg}`;
-    document.body.appendChild(badge);
-    setTimeout(() => badge.remove(), 6000);
-  }
-
-  // Função principal
-  async function carregarFarois() {
-    try {
-      const res = await fetch('/api/okrs');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-
-      let totalAtualizacoes = 0;
-
-      for (const tema of (data.temas || [])) {
-        for (const obj of (tema.objetivos || [])) {
-
-          // Atualiza farol do objetivo
-          const farolObj = encontrarFarolObjetivo(obj.objetivo);
-          if (farolObj) {
-            aplicarFarol(farolObj, obj.status, obj.statusLabel);
-            totalAtualizacoes++;
+          var match = melhorMatch(objTextEl.textContent, objetivos);
+          if (match) {
+            var farolEl = bloco.querySelector('.farol-obj .farol');
+            if (aplicarFarol(farolEl, match.status, match.statusLabel)) atualizados++;
           }
 
-          // Atualiza farol de cada resultado-chave
-          for (const r of (obj.resultados || [])) {
-            const farolR = encontrarFarolResultado(r.texto);
-            if (farolR) {
-              aplicarFarol(farolR, r.status, r.statusLabel);
-              totalAtualizacoes++;
+          bloco.querySelectorAll('.resultado').forEach(function(rEl) {
+            var rTextoEl = rEl.querySelector('.resultado-texto');
+            if (!rTextoEl) return;
+            var rMatch = melhorMatch(rTextoEl.textContent, resultados);
+            if (rMatch) {
+              var farolEl = rEl.querySelector('.farol');
+              if (aplicarFarol(farolEl, rMatch.status, rMatch.statusLabel)) atualizados++;
             }
-          }
-        }
-      }
+          });
+        });
 
-      exibirBadgeStatus(data.atualizadoEm, totalAtualizacoes);
-      console.log(`[Lekto OKR] ${totalAtualizacoes} farois atualizados do ClickUp.`);
-
-    } catch (err) {
-      console.warn('[Lekto OKR] Erro ao carregar farois do ClickUp:', err.message);
-      exibirBadgeErro(err.message);
-    }
+        var dataFmt = new Date(data.atualizadoEm).toLocaleString('pt-BR', {
+          day: '2-digit', month: '2-digit', year: 'numeric',
+          hour: '2-digit', minute: '2-digit'
+        });
+        exibirBadge('Farois atualizados via ClickUp · ' + dataFmt + ' · ' + atualizados + ' itens');
+        console.log('[Lekto OKR] ' + atualizados + ' farois atualizados.');
+      })
+      .catch(function(err) {
+        console.warn('[Lekto OKR] Erro:', err.message);
+        exibirBadge('Farol indisponivel: ' + err.message, '#7F1D1D');
+      });
   }
 
-  // Inicia após o DOM estar pronto
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', iniciarIntegracao);
+    document.addEventListener('DOMContentLoaded', function() { setTimeout(carregarFarois, 1000); });
   } else {
-    // Espera um tick para o JS do HTML renderizar os elementos
-    setTimeout(iniciarIntegracao, 800);
+    setTimeout(carregarFarois, 1000);
   }
 
-  // Atualiza automaticamente a cada 15 minutos
   setInterval(carregarFarois, 15 * 60 * 1000);
 
 })();
