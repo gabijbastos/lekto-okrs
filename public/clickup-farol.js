@@ -115,7 +115,7 @@
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function() { setTimeout(carregarFarois, 1000); });
   } else {
-    setTimeout(carregarFarois, 1000);
+    setTimeout(carregarFarois, 2500);
   }
 
   setInterval(carregarFarois, 15 * 60 * 1000);
